@@ -9,6 +9,7 @@ from openai import OpenAI
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class TextAnalysisService:
     def __init__(self):
         # Initialize OpenAI client
@@ -19,7 +20,7 @@ class TextAnalysisService:
             self.client = None
         else:
             self.demo_mode = False
-            self.client = OpenAI(api_key=api_key)
+            self.openai_client = OpenAI(api_key=api_key)
             logger.info("OpenAI client initialized successfully")
 
         # Initialize NLTK + RAKE
