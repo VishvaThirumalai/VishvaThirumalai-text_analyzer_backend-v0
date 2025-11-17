@@ -1,150 +1,152 @@
 import os
-import asyncio
 import logging
-from typing import Optional
-import random
-from openai import OpenAI
+from typing import List, Dict, Any
+from rake_nltk import Rake
+from nltk.tokenize import sent_tokenize
+import nltk
 
-# Set up logging
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# -----------------------------
+#  TEXT ANALYSIS SERVICE CLASS
+# -----------------------------
+
 class TextAnalysisService:
     def __init__(self):
-        # Initialize OpenAI client
+        """
+        Initialize OpenAI, NLTK and RAKE keyword extractor.
+        Fully compatible with OpenAI Python SDK >= 1.0
+        """
+
+        # Load OpenAI key
         api_key = os.getenv("OPENAI_API_KEY")
+
         if not api_key:
-            logger.warning("OPENAI_API_KEY not found. Using demo mode.")
+            logger.warning("⚠ OPENAI_API_KEY not found. Running in DEMO MODE.")
             self.demo_mode = True
             self.client = None
         else:
+            from openai import OpenAI
+            self.client = OpenAI()  # No deprecated parameters
             self.demo_mode = False
-            self.openai_client = OpenAI(api_key=api_key)
-            logger.info("OpenAI client initialized successfully")
+            logger.info("✅ OpenAI client initialized")
 
-        # Initialize NLTK + RAKE
+        # Initialize NLTK
         try:
-            import nltk
-            from rake_nltk import Rake
+            nltk.data.find("tokenizers/punkt")
+        except LookupError:
+            nltk.download("punkt")
 
-            try: nltk.data.find("tokenizers/punkt")
-            except LookupError: nltk.download("punkt")
+        try:
+            nltk.data.find("corpora/stopwords")
+        except LookupError:
+            nltk.download("stopwords")
 
-            try: nltk.data.find("corpora/stopwords")
-            except LookupError: nltk.download("stopwords")
-
+        # Initialize RAKE
+        try:
             self.rake = Rake()
-        except Exception as e:
-            logger.warning(f"Keyword extractor failed: {e}")
+        except:
+            logger.warning("RAKE initialization failed, keywords may be empty.")
             self.rake = None
 
-    async def analyze_text(self, text: str, target_tone: str = None) -> dict:
-        keywords = await self._extract_keywords(text)
-        tone = await self._analyze_sentiment(text)
-        moral = await self._extract_moral(text)
+    # ----------------------------------------------------------------------
+    # 1. SUMMARY / MORAL EXTRACTOR
+    # ----------------------------------------------------------------------
 
-        transformed_text = None
-        if target_tone:
-            transformed_text = await self._transform_tone(text, target_tone)
+    def extract_moral(self, text: str) -> str:
+        """
+        Extract a short moral or main lesson from the text.
+        """
 
-        return {
-            "moral": moral,
-            "keywords": keywords,
-            "transformed_text": transformed_text,
-            "original_tone": tone["label"],
-            "target_tone": target_tone,
-            "confidence": tone["score"]
-        }
-
-    async def _extract_keywords(self, text: str) -> list:
-        if self.rake:
-            try:
-                self.rake.extract_keywords_from_text(text)
-                return self.rake.get_ranked_phrases()[:10]
-            except:
-                pass
-
-        words = text.lower().split()
-        common = {'the','a','an','and','or','but','in','on','at','to','for','of','with','by','is','are'}
-        return [w for w in words if w not in common and len(w) > 3][:10]
-
-    async def _analyze_sentiment(self, text: str) -> dict:
-        try:
-            from transformers import pipeline
-            sentiment = pipeline("sentiment-analysis")
-            r = sentiment(text[:512])[0]
-            return {
-                "label": "positive" if "POS" in r["label"] else "negative",
-                "score": float(r["score"])
-            }
-        except:
-            return {"label": "neutral", "score": 0.5}
-
-    async def _extract_moral(self, text: str) -> str:
         if self.demo_mode:
-            return self._demo_moral_extraction(text)
+            return "Demo moral: Always be kind and responsible."
 
         try:
-            resp = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{
-                        "role": "user",
-                        "content": f"Extract the moral lesson in 1–2 sentences:\n{text[:1500]}"
-                    }]
-                )
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Extract the moral of this passage."},
+                    {"role": "user", "content": text}
+                ]
             )
-            return resp.choices[0].message["content"].strip()
-
+            return response.choices[0].message.content
         except Exception as e:
-            logger.error(f"Moral extraction failed: {e}")
-            return self._demo_moral_extraction(text)
+            logger.error(f"Error generating moral: {e}")
+            return "Error generating moral."
 
-    async def _transform_tone(self, text: str, target_tone: str) -> str:
+    # ----------------------------------------------------------------------
+    # 2. KEYWORD EXTRACTOR
+    # ----------------------------------------------------------------------
+
+    def extract_keywords(self, text: str) -> List[str]:
+        """
+        Extract important keywords from the text using RAKE.
+        """
+
+        if not self.rake:
+            return ["keyword extraction unavailable"]
+
+        try:
+            self.rake.extract_keywords_from_text(text)
+            keywords = self.rake.get_ranked_phrases()[:8]
+            return keywords
+        except Exception as e:
+            logger.error(f"Keyword extraction failed: {e}")
+            return []
+
+    # ----------------------------------------------------------------------
+    # 3. TONALITY MODIFY FUNCTION
+    # ----------------------------------------------------------------------
+
+    def change_tone(self, text: str, tone: str) -> str:
+        """
+        Convert text tonality to: formal, informal, complaint, friendly, etc.
+        """
+
         if self.demo_mode:
-            return self._demo_tone_transformation(text, target_tone)
-
-        prompts = {
-            "formal": "Rewrite formally:",
-            "informal": "Rewrite casually:",
-            "friendly": "Rewrite in friendly tone:",
-            "complaint": "Rewrite as a complaint:",
-            "professional": "Rewrite in business tone:",
-            "persuasive": "Rewrite persuasively:",
-            "academic": "Rewrite academically:",
-            "casual": "Rewrite casually:"
-        }
-
-        instruction = prompts.get(target_tone, "Rewrite this:")
+            return f"[Demo] Converted to {tone} tone."
 
         try:
-            resp = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{
-                        "role": "user",
-                        "content": f"{instruction}\n\n{text[:1500]}"
-                    }]
-                )
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system",
+                     "content": f"Rewrite the text in a {tone} tone."},
+                    {"role": "user", "content": text}
+                ]
             )
-            return resp.choices[0].message["content"].strip()
-
+            return response.choices[0].message.content
         except Exception as e:
-            logger.error(f"Tone transformation failed: {e}")
-            return self._demo_tone_transformation(text, target_tone)
+            logger.error(f"Tone conversion failed: {e}")
+            return "Error converting tone."
 
-    def _demo_moral_extraction(self, text: str) -> str:
-        themes = [
-            "perseverance", "honesty", "friendship",
-            "kindness", "growth", "courage"
-        ]
-        return f"This story teaches a lesson about {random.choice(themes)}."
+    # ----------------------------------------------------------------------
+    # 4. FULL PROCESSOR – COMBINES EVERYTHING
+    # ----------------------------------------------------------------------
 
-    def _demo_tone_transformation(self, text: str, tone: str) -> str:
-        return f"[{tone.upper()} VERSION] {text[:200]}..."
+    def analyze_text(self, text: str, tone: str = None) -> Dict[str, Any]:
+        """
+        Complete pipeline:
+        - Moral extraction
+        - Keyword extraction
+        - Tone transformation (optional)
+        """
 
-# Global instance
+        result = {}
+
+        result["moral"] = self.extract_moral(text)
+        result["keywords"] = self.extract_keywords(text)
+
+        if tone:
+            result["converted_text"] = self.change_tone(text, tone)
+        else:
+            result["converted_text"] = None
+
+        return result
+
+
+# Global shared service instance
 text_service = TextAnalysisService()
