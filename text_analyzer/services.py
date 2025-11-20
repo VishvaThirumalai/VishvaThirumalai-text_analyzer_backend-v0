@@ -18,7 +18,7 @@ class TextAnalysisService:
     def __init__(self):
         """
         Initialize OpenAI, NLTK and RAKE keyword extractor.
-        Fully compatible with OpenAI Python SDK >= 1.0
+        Compatible with OpenAI Python SDK >= 1.0
         """
 
         # Load OpenAI key
@@ -30,7 +30,8 @@ class TextAnalysisService:
             self.client = None
         else:
             from openai import OpenAI
-            self.client = OpenAI()  # No deprecated parameters
+            # Initialize with just the API key - no extra parameters
+            self.client = OpenAI(api_key=api_key)
             self.demo_mode = False
             logger.info("✅ OpenAI client initialized")
 
@@ -48,8 +49,8 @@ class TextAnalysisService:
         # Initialize RAKE
         try:
             self.rake = Rake()
-        except:
-            logger.warning("RAKE initialization failed, keywords may be empty.")
+        except Exception as e:
+            logger.warning(f"RAKE initialization failed: {e}")
             self.rake = None
 
     # ----------------------------------------------------------------------
@@ -60,17 +61,24 @@ class TextAnalysisService:
         """
         Extract a short moral or main lesson from the text.
         """
-
         if self.demo_mode:
             return "Demo moral: Always be kind and responsible."
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-3.5-turbo",  # Using gpt-3.5-turbo for cost efficiency
                 messages=[
-                    {"role": "system", "content": "Extract the moral of this passage."},
-                    {"role": "user", "content": text}
-                ]
+                    {
+                        "role": "system", 
+                        "content": "You are a helpful text analyzer. Extract the main moral or lesson from the given text in 1-2 sentences."
+                    },
+                    {
+                        "role": "user", 
+                        "content": f"Text to analyze: {text}"
+                    }
+                ],
+                max_tokens=100,
+                temperature=0.7
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -85,7 +93,6 @@ class TextAnalysisService:
         """
         Extract important keywords from the text using RAKE.
         """
-
         if not self.rake:
             return ["keyword extraction unavailable"]
 
@@ -105,18 +112,24 @@ class TextAnalysisService:
         """
         Convert text tonality to: formal, informal, complaint, friendly, etc.
         """
-
         if self.demo_mode:
-            return f"[Demo] Converted to {tone} tone."
+            return f"[Demo] Converted to {tone} tone: {text[:100]}..."
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system",
-                     "content": f"Rewrite the text in a {tone} tone."},
-                    {"role": "user", "content": text}
-                ]
+                    {
+                        "role": "system",
+                        "content": f"You are a tone converter. Rewrite the following text in a {tone} tone while preserving the original meaning."
+                    },
+                    {
+                        "role": "user", 
+                        "content": text
+                    }
+                ],
+                max_tokens=500,
+                temperature=0.7
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -134,8 +147,12 @@ class TextAnalysisService:
         - Keyword extraction
         - Tone transformation (optional)
         """
-
         result = {}
+
+        # Validate input
+        if not text or len(text.strip()) == 0:
+            result["error"] = "Text cannot be empty"
+            return result
 
         result["moral"] = self.extract_moral(text)
         result["keywords"] = self.extract_keywords(text)
